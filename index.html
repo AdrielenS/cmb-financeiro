@@ -21,7 +21,14 @@ body.cloud-locked aside,body.cloud-locked main{display:none!important}
 <h2>☁ CMB Financeiro — Acesso seguro</h2><p class="auth-hint">Entre com sua conta individual para acessar os registros salvos no banco de dados. Na primeira utilização, configure um projeto Supabase criado por você ou pela empresa. Nenhuma conexão é feita até a configuração.</p>
 <div id="setupFields"><label>URL do projeto Supabase<input id="supabaseUrl" type="url" placeholder="https://seu-projeto.supabase.co" autocomplete="off"></label><label>Chave pública (anon / publishable)<input id="supabaseKey" type="text" placeholder="sb_publishable_... ou chave anon" autocomplete="off"></label><p class="auth-hint">Nunca informe a chave <b>service_role/secret</b>. Use apenas a chave pública e execute o SQL fornecido no guia.</p><button type="button" onclick="saveCloudConfig()">Salvar configuração deste navegador</button></div>
 <form id="cloudLogin" onsubmit="cloudSignIn(event)"><label>E-mail<input id="cloudEmail" type="email" required autocomplete="username"></label><label>Senha<input id="cloudPassword" type="password" required minlength="6" autocomplete="current-password"></label><div class="auth-actions"><button class="primary" type="submit">Entrar</button><button type="button" onclick="cloudRegister()">Criar conta</button></div></form>
-<div id="recoveryRequest"><button type="button" onclick="cloudRequestPasswordReset()">Esqueci minha senha</button></div>
+<div id="recoveryRequest"><button type="button" id="openRecoveryBtn" onclick="cloudShowRecoveryRequest()">Esqueci minha senha</button></div>
+<div id="recoveryForm" style="display:none;border:1px solid #cbd9d1;border-radius:10px;padding:14px;margin-top:14px">
+<h3>Recuperar acesso</h3>
+<p class="auth-hint">Enviaremos um link para o e-mail cadastrado. Ele abrirá o CMB Financeiro para você definir uma nova senha.</p>
+<label>E-mail cadastrado<input type="email" id="recoveryEmail" placeholder="seuemail@empresa.com.br" autocomplete="email"></label>
+<div class="auth-actions"><button type="button" class="primary" id="sendRecoveryBtn" onclick="cloudRequestPasswordReset()">Enviar link de recuperação</button><button type="button" onclick="cloudHideRecoveryRequest()">Voltar</button></div>
+<p id="recoveryFeedback" class="auth-hint" role="status" aria-live="polite"></p>
+</div>
 <div id="recoverySet" style="display:none;border:1px solid #cbd9d1;border-radius:10px;padding:12px;margin-top:14px"><h3>Definir nova senha</h3><p class="auth-hint">Você abriu um link de recuperação. Escolha uma senha nova e confirme abaixo.</p><label>Nova senha<input type="password" id="recoveryNewPassword" autocomplete="new-password" minlength="8"></label><label>Confirmar nova senha<input type="password" id="recoveryConfirmPassword" autocomplete="new-password" minlength="8"></label><button type="button" onclick="cloudFinishRecovery()">Salvar nova senha</button></div>
 <p id="authFeedback" class="auth-hint" role="status"></p><p class="auth-hint">Se o projeto exigir confirmação de e-mail, confirme pelo link recebido antes do primeiro login. Para trocar de projeto, altere a URL e a chave acima e entre novamente.</p>
 </div></div>
@@ -91,17 +98,32 @@ async function cloudStart(){document.body.classList.remove('cloud-locked');docum
 async function cloudSignIn(event){event.preventDefault();let btn=event.target.querySelector('[type=submit]');btn.disabled=true;authFeedback('Validando acesso…');try{cloudCfg=readCloudCfg();if(!cloudCfg)throw Error('Configure o projeto e salve antes de entrar.');let email=document.getElementById('cloudEmail').value.trim(),password=document.getElementById('cloudPassword').value;let result=await cloudRequest('/auth/v1/token?grant_type=password',{method:'POST',body:JSON.stringify({email,password})});if(!result.access_token||!result.user?.id)throw Error('A resposta não contém uma sessão válida.');cloudSession=result;sessionStorage.setItem(CLOUD_SESSION,JSON.stringify(result));document.getElementById('cloudPassword').value='';await cloudStart()}catch(e){authFeedback('Falha no acesso: '+e.message)}finally{btn.disabled=false}}
 async function cloudRegister(){try{cloudCfg=readCloudCfg();if(!cloudCfg)throw Error('Configure o projeto antes de criar a conta.');let email=document.getElementById('cloudEmail').value.trim(),password=document.getElementById('cloudPassword').value;if(!email||password.length<6)throw Error('Informe e-mail e senha com pelo menos seis caracteres.');authFeedback('Criando conta…');await cloudRequest('/auth/v1/signup',{method:'POST',body:JSON.stringify({email,password})});authFeedback('Cadastro solicitado. Confirme o e-mail, se exigido pelo projeto, e depois clique em Entrar.')}catch(e){authFeedback('Erro ao cadastrar: '+e.message)}}
 // Recuperação de senha: links Supabase com tokens no fragmento da URL.
+function cloudShowRecoveryRequest(){
+  document.getElementById('recoveryForm').style.display='block';
+  document.getElementById('recoveryRequest').style.display='none';
+  document.getElementById('recoveryEmail').value=document.getElementById('cloudEmail').value.trim();
+  document.getElementById('recoveryFeedback').textContent='Informe seu e-mail e clique em Enviar link de recuperação.';
+  document.getElementById('recoveryEmail').focus();
+}
+function cloudHideRecoveryRequest(){
+  document.getElementById('recoveryForm').style.display='none';
+  document.getElementById('recoveryRequest').style.display='block';
+}
 async function cloudRequestPasswordReset(){
+  const btn=document.getElementById('sendRecoveryBtn');
+  const feedback=document.getElementById('recoveryFeedback');
+  btn.disabled=true; feedback.textContent='Solicitando link de recuperação…';
   try{
-    cloudCfg=readCloudCfg();if(!cloudCfg)throw Error('Configure e salve a conexão com o Supabase.');
-    const email=document.getElementById('cloudEmail').value.trim();
-    if(!email)throw Error('Informe seu e-mail no campo acima antes de solicitar.');
-    if(location.protocol!=='https:')throw Error('Para recuperar a senha, abra a versão publicada em HTTPS no GitHub Pages.');
-    // Use o endereço da página atual, sem parâmetros nem fragmentos.
+    cloudCfg=readCloudCfg();
+    if(!cloudCfg)throw Error('Preencha a URL e a chave pública do Supabase e clique em “Salvar configuração deste navegador” primeiro.');
+    const email=document.getElementById('recoveryEmail').value.trim();
+    if(!email)throw Error('Informe o e-mail cadastrado.');
+    if(location.protocol!=='https:')throw Error('Abra a versão publicada em HTTPS no GitHub Pages.');
     const redirectTo=location.origin+location.pathname;
     await cloudRequest('/auth/v1/recover?redirect_to='+encodeURIComponent(redirectTo),{method:'POST',body:JSON.stringify({email})});
-    authFeedback('Se existir uma conta com esse e-mail, você receberá um link de recuperação. Abra o link neste mesmo navegador.');
-  }catch(e){authFeedback('Não foi possível solicitar recuperação: '+e.message)}
+    feedback.textContent='Solicitação recebida. Se o e-mail estiver cadastrado, verifique sua caixa de entrada e o spam. Use o link mais recente.';
+  }catch(e){feedback.textContent='Erro: '+e.message}
+  finally{btn.disabled=false}
 }
 function cloudPrepareRecovery(){
   const fragment=new URLSearchParams(location.hash.replace(/^#/,''));
